@@ -48,7 +48,13 @@ export function StickyNote({ note, onDelete, onUpdate, onUpdateHeight, isSelecte
     // Handle selection
     if (onSelect && !isResizing) {
       const addToSelection = e.shiftKey || e.ctrlKey || e.metaKey;
-      onSelect(note.id, addToSelection);
+      // If this note is already part of a multi-selection and no modifier key is
+      // held, do NOT clear the selection here. Clearing it would happen before
+      // react-dnd fires dragstart, so the drag item would only ever see a single
+      // note and the group would never move together.
+      if (addToSelection || !isSelected) {
+        onSelect(note.id, addToSelection);
+      }
     }
 
     // Handle resize for aggregates

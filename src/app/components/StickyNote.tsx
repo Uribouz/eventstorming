@@ -19,16 +19,25 @@ export function StickyNote({ note, onDelete, onUpdate, onUpdateHeight, isSelecte
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
 
+  // Keep a ref so the useDrag item callback always reads the latest selection
+  const selectedNoteIdsRef = useRef(selectedNoteIds);
+  useEffect(() => {
+    selectedNoteIdsRef.current = selectedNoteIds;
+  }, [selectedNoteIds]);
+
   const [{ isDragging }, drag] = useDrag(() => ({
     type: 'note',
-    item: () => ({ 
-      id: note.id,
-      selectedIds: selectedNoteIds && selectedNoteIds.has(note.id) ? Array.from(selectedNoteIds) : [note.id]
-    }),
+    item: () => {
+      const ids = selectedNoteIdsRef.current;
+      return {
+        id: note.id,
+        selectedIds: ids && ids.has(note.id) ? Array.from(ids) : [note.id],
+      };
+    },
     collect: (monitor) => ({
       isDragging: monitor.isDragging(),
     }),
-  }));
+  }), [note.id]);
 
   const isAggregate = note.type === 'aggregate';
   const isIssue = note.type === 'issue';
@@ -84,6 +93,7 @@ export function StickyNote({ note, onDelete, onUpdate, onUpdateHeight, isSelecte
     <div
       ref={drag}
       onMouseDown={handleMouseDown}
+      data-is-note="true"
       className={`absolute ${noteColors[note.type]} ${noteSizes[note.type]} p-3 rounded shadow-md cursor-move group hover:shadow-lg transition-all flex flex-col ${transformStyle} ${
         isSelected ? 'ring-4 ring-blue-500 ring-offset-2' : ''
       }`}

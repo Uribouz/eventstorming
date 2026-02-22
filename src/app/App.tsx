@@ -200,13 +200,17 @@ function Canvas() {
   }, [arrowStartId]);
 
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    // Cancel arrow creation if clicking on canvas
-    if (arrowStartId !== null && (e.target === e.currentTarget || (e.target as HTMLElement).closest('.canvas-content'))) {
+    const target = e.target as HTMLElement;
+    // A click is "on a note" if the target is inside a note element
+    const clickedOnNote = target.closest('[data-is-note]') !== null;
+
+    // Cancel arrow creation only when clicking on the canvas background, not on a note
+    if (arrowStartId !== null && !clickedOnNote) {
       setArrowStartId(null);
     }
 
-    // Only start selection if clicking on canvas background
-    if (e.target === e.currentTarget || (e.target as HTMLElement).closest('.canvas-content')) {
+    // Only start selection box when clicking on canvas background (not on a note)
+    if (!clickedOnNote && (e.target === e.currentTarget || target.closest('.canvas-content'))) {
       const rect = canvasRef.current?.getBoundingClientRect();
       if (rect) {
         selectionStartRef.current = {
@@ -313,7 +317,7 @@ function Canvas() {
             ))}
             
             {/* SVG layer for arrows */}
-            <svg className="absolute inset-0 pointer-events-none" style={{ zIndex: 5 }}>
+            <svg className="absolute inset-0" style={{ zIndex: 5, width: '100%', height: '100%', pointerEvents: 'none' }}>
               {arrows.map((arrow) => (
                 <ArrowLine
                   key={arrow.id}

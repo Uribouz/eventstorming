@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { DndProvider, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { StickyNote } from './components/StickyNote';
@@ -8,7 +8,19 @@ import { BoundedContext } from './components/BoundedContext';
 import { Toolbar } from './components/Toolbar';
 import { WorkshopTimer } from './components/WorkshopTimer';
 import { WorkshopTitle } from './components/WorkshopTitle';
+import { SyncStatus } from './components/SyncStatus';
 import { StickyNote as StickyNoteType, PivotalLine as PivotalLineType, ArrowLine as ArrowLineType, BoundedContext as BoundedContextType, NoteType } from './types';
+import { projectId, publicAnonKey } from '../../utils/supabase/info';
+
+const API_BASE_URL = `https://${projectId}.supabase.co/functions/v1/make-server-a79a26d0`;
+const STORAGE_KEY = 'event-storming-canvas-local-backup';
+
+interface SavedState {
+  notes: StickyNoteType[];
+  lines: PivotalLineType[];
+  arrows: ArrowLineType[];
+  contexts: BoundedContextType[];
+}
 
 function Canvas() {
   const [notes, setNotes] = useState<StickyNoteType[]>([]);
@@ -21,8 +33,197 @@ function Canvas() {
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionBox, setSelectionBox] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [arrowStartId, setArrowStartId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const selectionStartRef = useRef({ x: 0, y: 0 });
   const canvasRef = useRef<HTMLDivElement>(null);
+  const lastTimestampRef = useRef(0);
+  const saveTimeoutRef = useRef<number | null>(null);
+
+  // Load from localStorage as backup
+  const loadFromLocalStorage = useCallback((): SavedState => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (error) {
+      console.error('Failed to load from localStorage:', error);
+    }
+    return { notes: [], lines: [], arrows: [], contexts: [] };
+  }, []);
+
+  // Save to localStorage as backup
+  const saveToLocalStorage = useCallback((state: SavedState) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (error) {
+      console.error('Failed to save to localStorage:', error);
+    }
+  }, []);
+
+  // Load initial board state from server
+  useEffect(() => {
+    const loadBoard = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/board`, {
+          headers: {
+            'Authorization': `Bearer ${publicAnonKey}`,
+          },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setNotes(data.notes || []);
+          setLines(data.lines || []);
+          setArrows(data.arrows || []);
+          setContexts(data.contexts || []);
+          setIsOnline(true);
+          
+          // Save to localStorage as backup
+          saveToLocalStorage(data);
+        } else {
+          console.error('Failed to load board state from server, using local backup');
+          const localData = loadFromLocalStorage();
+          setNotes(localData.notes);
+          setLines(localData.lines);
+          setArrows(localData.arrows);
+          setContexts(localData.contexts);
+          setIsOnline(false);
+        }
+      } catch (error) {
+        console.error('Error loading board state from server, using local backup:', error);
+        const localData = loadFromLocalStorage();
+        setNotes(localData.notes);
+        setLines(localData.lines);
+        setArrows(localData.arrows);
+        setContexts(localData.contexts);
+        setIsOnline(false);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadBoard();
+  }, [loadFromLocalStorage, saveToLocalStorage]);
+
+  // Save board state to server with debouncing
+  const saveToServer = useCallback(async (state: SavedState) => {
+    // Always save to localStorage as backup
+    saveToLocalStorage(state);
+
+    try {
+      setIsSyncing(true);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      const response = await fetch(`${API_BASE_URL}/board/update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${publicAnonKey}`,
+        },
+        body: JSON.stringify(state),
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (response.ok) {
+        const data = await response.json();
+        lastTimestampRef.current = data.timestamp;
+        setIsOnline(true);
+      } else if (response.status === 503) {
+        console.warn('Server temporarily unavailable (503), will retry later');
+        setIsOnline(false);
+      } else {
+        console.warn('Failed to save to server, data saved locally');
+        setIsOnline(false);
+      }
+    } catch (error) {
+      if ((error as Error).name === 'AbortError') {
+        console.warn('Request timed out, data saved locally');
+      } else {
+        console.warn('Server unavailable, data saved locally');
+      }
+      setIsOnline(false);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [saveToLocalStorage]);
+
+  // Auto-save to server whenever state changes (with debouncing)
+  useEffect(() => {
+    if (isLoading) return; // Don't save during initial load
+
+    // Clear existing timeout
+    if (saveTimeoutRef.current !== null) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    // Debounce saves to avoid too many requests
+    saveTimeoutRef.current = window.setTimeout(() => {
+      const saveState: SavedState = {
+        notes,
+        lines,
+        arrows,
+        contexts,
+      };
+      saveToServer(saveState);
+    }, 500); // Wait 500ms after last change before saving
+
+    return () => {
+      if (saveTimeoutRef.current !== null) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [notes, lines, arrows, contexts, isLoading, saveToServer]);
+
+  // Poll for updates from other users
+  useEffect(() => {
+    if (isLoading || !isOnline) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        // First check if there's a new timestamp
+        const timestampResponse = await fetch(`${API_BASE_URL}/board/timestamp`, {
+          headers: {
+            'Authorization': `Bearer ${publicAnonKey}`,
+          },
+        });
+        
+        if (timestampResponse.ok) {
+          const { timestamp } = await timestampResponse.json();
+          
+          // Only fetch the full board if timestamp has changed
+          if (timestamp > lastTimestampRef.current) {
+            const boardResponse = await fetch(`${API_BASE_URL}/board`, {
+              headers: {
+                'Authorization': `Bearer ${publicAnonKey}`,
+              },
+            });
+            
+            if (boardResponse.ok) {
+              const data = await boardResponse.json();
+              setNotes(data.notes || []);
+              setLines(data.lines || []);
+              setArrows(data.arrows || []);
+              setContexts(data.contexts || []);
+              lastTimestampRef.current = timestamp;
+              setIsOnline(true);
+              
+              // Update local backup
+              saveToLocalStorage(data);
+            }
+          }
+        }
+      } catch (error) {
+        // Silently handle polling errors, stay in offline mode
+        setIsOnline(false);
+      }
+    }, 3000); // Poll every 3 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [isLoading, isOnline, saveToLocalStorage]);
 
   const [, drop] = useDrop(() => ({
     accept: ['note', 'line', 'context'],
@@ -376,6 +577,7 @@ function Canvas() {
           </div>
         )}
       </div>
+      <SyncStatus isSyncing={isSyncing} isLoading={isLoading} isOnline={isOnline} />
     </div>
   );
 }

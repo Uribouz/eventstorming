@@ -40,6 +40,7 @@ function Canvas() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const lastTimestampRef = useRef(0);
   const saveTimeoutRef = useRef<number | null>(null);
+  const editingNoteIdRef = useRef<string | null>(null);
 
   // Load from localStorage as backup
   const loadFromLocalStorage = useCallback((): SavedState => {
@@ -204,13 +205,24 @@ function Canvas() {
             
             if (boardResponse.ok) {
               const data = await boardResponse.json();
-              setNotes(data.notes || []);
+              // If a note is being actively edited, preserve its local text so
+              // poll updates from other users don't clobber the user's in-progress typing.
+              const activeEditId = editingNoteIdRef.current;
+              setNotes((currentNotes) => {
+                const serverNotes: StickyNoteType[] = data.notes || [];
+                if (!activeEditId) return serverNotes;
+                const localNote = currentNotes.find((n) => n.id === activeEditId);
+                if (!localNote) return serverNotes;
+                return serverNotes.map((n) =>
+                  n.id === activeEditId ? { ...n, text: localNote.text } : n
+                );
+              });
               setLines(data.lines || []);
               setArrows(data.arrows || []);
               setContexts(data.contexts || []);
               lastTimestampRef.current = timestamp;
               setIsOnline(true);
-              
+
               // Update local backup
               saveToLocalStorage(data);
             }
@@ -382,6 +394,14 @@ function Canvas() {
     });
   }, []);
 
+  const handleEditStart = useCallback((id: string) => {
+    editingNoteIdRef.current = id;
+  }, []);
+
+  const handleEditEnd = useCallback(() => {
+    editingNoteIdRef.current = null;
+  }, []);
+
   const handleStartArrow = useCallback((fromId: string) => {
     if (arrowStartId === null) {
       setArrowStartId(fromId);
@@ -541,6 +561,8 @@ function Canvas() {
                 onSelect={handleSelectNote}
                 onStartArrow={handleStartArrow}
                 selectedNoteIds={selectedNotes}
+                onEditStart={handleEditStart}
+                onEditEnd={handleEditEnd}
               />
             ))}
             

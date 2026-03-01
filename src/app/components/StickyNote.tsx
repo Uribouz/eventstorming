@@ -12,9 +12,11 @@ interface StickyNoteProps {
   onSelect?: (id: string, addToSelection: boolean) => void;
   onStartArrow?: (id: string) => void;
   selectedNoteIds?: Set<string>;
+  onEditStart?: (id: string) => void;
+  onEditEnd?: (id: string) => void;
 }
 
-export function StickyNote({ note, onDelete, onUpdate, onUpdateHeight, isSelected, onSelect, onStartArrow, selectedNoteIds }: StickyNoteProps) {
+export function StickyNote({ note, onDelete, onUpdate, onUpdateHeight, isSelected, onSelect, onStartArrow, selectedNoteIds, onEditStart, onEditEnd }: StickyNoteProps) {
   const [isResizing, setIsResizing] = useState(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
@@ -137,6 +139,8 @@ export function StickyNote({ note, onDelete, onUpdate, onUpdateHeight, isSelecte
       <textarea
         value={note.text}
         onChange={(e) => onUpdate(note.id, e.target.value)}
+        onFocus={() => onEditStart?.(note.id)}
+        onBlur={() => onEditEnd?.(note.id)}
         className={`w-full h-full bg-transparent border-none outline-none resize-none font-medium text-sm ${contentTransformStyle}`}
         placeholder="Type here..."
         onClick={(e) => e.stopPropagation()}
